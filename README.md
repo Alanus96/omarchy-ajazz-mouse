@@ -21,33 +21,34 @@ Protocol was reverse-engineered by the ATK/VXE community — see [Credits](#cred
 ## Requirements
 
 - Omarchy (Quattro shell) with `omarchy plugin`.
-- `python-hidapi` (battery) and `python-pyusb` (configuration reads/writes).
-- Access to the mouse's `hidraw` and USB device nodes via the shipped udev
-  rule (granted to the `wheel` group, the default admin group on Arch).
+- The Python modules `python-hidapi` (battery) and `python-pyusb`
+  (configuration reads/writes), installed through your package manager.
+- Access to the mouse's `hidraw` and USB device nodes, granted by the shipped
+  udev rule to the `wheel` group (the default admin group on Arch).
 
 ## Install
 
 ```bash
 # 1. install the widget (clones this repo into your plugin dir)
 omarchy plugin add https://github.com/Alanus96/omarchy-ajazz-mouse --enable
+```
 
-# 2. dependencies
-omarchy pkg add python-hidapi python-pyusb       # or: sudo pacman -S python-hidapi python-pyusb
+2. Make sure `python-hidapi` and `python-pyusb` are installed through your
+   package manager. This repository does not install anything itself.
 
-# 3. permissions: install the udev rule (needs sudo; do this once)
+3. Install the udev rule once (needs `sudo`), then unplug/replug the mouse or
+   dongle so it takes effect:
+
+```bash
 PLUGIN_DIR="$HOME/.config/omarchy/plugins/io.github.alanus96.ajazz-mouse"
 sudo install -m 0644 "$PLUGIN_DIR/udev/99-ajazz-aj139-pro.rules" /etc/udev/rules.d/
 sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=usb --action=change
-sudo udevadm trigger --subsystem-match=hidraw --action=change
-# then unplug/replug the mouse or dongle once
 ```
 
-From a cloned copy you can run `./setup.sh` instead of step 3.
-
-> **Manual setup is required:** the udev rule and the Python modules cannot be
-> installed automatically by the marketplace. The widget will show nothing
-> until they are in place.
+> **Manual setup is required:** the udev rule cannot be installed
+> automatically, and the widget shows nothing until it is in place. No `sudo`
+> is needed at runtime — the rule only lets your normal user read/write the
+> device's `hidraw` and USB nodes.
 
 ## Removal
 
