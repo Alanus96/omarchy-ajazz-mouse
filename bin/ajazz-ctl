@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""ajazz-ctl - read and configure an Ajazz AJ139 Pro (COMPX) mouse on Linux.
+
+Protocol (reverse-engineered by the ATK/VXE community, "libatk-rs"):
+USB HID report id 0x08.  A 16-byte command [cmd, status, addr_hi, addr_lo,
+data_len, 10 data bytes, checksum] is sent as a control SET_REPORT
+(bmRequestType 0x21, bRequest 0x09, wValue 0x0208); the reply arrives on the
+interface's interrupt-IN endpoint (0x82).  Checksum settles the sum at 0x55.
+
+Command ids: 0x04 GetBatteryLevel, 0x07 SetEEPROM, 0x08 GetEEPROM.
+
+Reading/writing EEPROM needs the kernel HID driver detached for interface 1
+for the duration of the call; the mouse's movement interface is untouched.
+A full backup is written before the first modification.
+"""
+import argparse
+import datetime
+import json
+import os
+import sys
+import time
+
+try:
+    import usb.core
+    import usb.util
+except ImportError:
+    sys.stderr.write("pyusb not installed (python-usb)\n")
+    sys.exit(1)
+
+VID = 0x25A7
+PIDS = [0xFA7B, 0xFA7C]  # wired, 2.4G dongle
+RID = 0x08
+CMD_GET_BATTERY = 0x04
+CMD_SET = 0x07
+CMD_GET = 0x08
+EP_IN = 0x82
+BACKUP_DIR = os.path.expanduser("~/.cache/ajazz-ctl")
+
+ADDR = {
+    "report_rate": 0x00, "current_dpi": 0x04,
+    "dpi_pair1": 0x0C, "dpi_pair3": 0x14, "dpi_pair5": 0x1C, "dpi_pair7": 0x24,
+    "color_pair1": 0x2C, "color_pair3": 0x34, "color_pair5": 0x3C, "color_pair7": 0x44,
+    "stabilization": 0xA9, "motion_sync": 0xAB, "close_led_time": 0xAD,
+    "linear_correction": 0xAF, "ripple_control": 0xB1, "move_close_lights": 0xB3,
+    "sensor_enable": 0xB5, "sensor_time": 0xB7, "sensor_mode": 0xB9, "rf_tx_time": 0xBB,
+}
+RATE_MS = {1000: 1, 500: 2, 250: 4, 125: 8}
+MS_RATE = {v: k for k, v in RATE_MS.items()}
+
+
+class MouseError(Exception):
+    pass
+
+
+class Mouse:
+    def __init__(self):
+        self.dev = None
+        self.detached = False
+
+    def __enter__(self):
+        for pid in PIDS:
+            d = usb.core.find(idVendor=VID, idProduct=pid)
+            if d:
+                self.dev = d
+                break
+        if self.dev is None:
+            raise MouseError("Ajazz/COMPX mouse not found (wired 25a7:fa7b or dongle 25a7:fa7c)")
+        try:
+            if self.dev.is_kernel_driver_active(1):
+                self.dev.detach_kernel_driver(1)
+                self.detached = True
+        except Exception:
+            pass
+        usb.util.claim_interface(self.dev, 1)
+        # give the kernel a moment to settle after detach
+        time.sleep(0.03)
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            usb.util.release_interface(self.dev, 1)
+        except Exception:
+            pass
+        if self.detached:
+            try:
+                self.dev.attach_kernel_driver(1)
+            except Exception:
+                pass
+        usb.util.dispose_resources(self.dev)
+        return False
+
+    # ── low level ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _command(cmd, addr, data):
+        data = list(data)
+        payload = [cmd, 0x00, (addr >> 8) & 0xFF, addr & 0xFF, len(data)] + data
+        payload += [0] * (15 - len(payload))
+        s = RID + sum(payload)
+        payload.append((0x55 - (s & 0xFF)) & 0xFF)
+        return [RID] + payload
+
+    def _xfer(self, cmd, addr, data, timeout=800):
+        packet = self._command(cmd, addr, data)
+        self.dev.ctrl_transfer(0x21, 0x09, 0x0208, 1, packet)
+        last = None
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            try:
+                r = list(self.dev.read(EP_IN, 17, timeout=timeout))
+            except Exception as e:
+                last = e
+                continue
+            if len(r) >= 5 and r[0] == 0x09:
+                rcmd, status, ahi, alo, ln = r[1], r[2], r[3], r[4], r[5]
+                resp_addr = (ahi << 8) | alo
+                if rcmd == cmd and (cmd == CMD_GET_BATTERY or resp_addr == addr):
+                    if status != 0:
+                        raise MouseError(f"device returned status={status} for cmd 0x{cmd:02x} addr 0x{addr:02x}")
+                    return list(r[6:6 + ln])
+        raise MouseError(f"no reply for cmd 0x{cmd:02x} addr 0x{addr:02x}" + (f" ({last})" if last else ""))
+
+    # ── public ─────────────────────────────────────────────────────────────
+    def battery(self):
+        data = self._xfer(CMD_GET_BATTERY, 0x00, [])
+        if len(data) < 2:
+            raise MouseError("short battery reply")
+        return data[0], bool(data[1])
+
+    def read(self, addr, length):
+        return self._xfer(CMD_GET, addr, [0] * length)
+
+    def write(self, addr, data):
+        self._xfer(CMD_SET, addr, data)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def read_all(self):
+        bat = self.battery()
+        rr = self.read(ADDR["report_rate"], 10)
+        dpi = []
+        for a in (ADDR["dpi_pair1"], ADDR["dpi_pair3"], ADDR["dpi_pair5"], ADDR["dpi_pair7"]):
+            d = self.read(a, 8)
+            dpi += [decode_dpi(d[0:4]), decode_dpi(d[4:8])]
+        colors = []
+        for a in (ADDR["color_pair1"], ADDR["color_pair3"], ADDR["color_pair5"], ADDR["color_pair7"]):
+            d = self.read(a, 8)
+            colors += ["#%02x%02x%02x" % (d[0], d[1], d[2]), "#%02x%02x%02x" % (d[4], d[5], d[6])]
+        low = self.read(ADDR["stabilization"], 10)      # 0xa9..0xb2
+        high = self.read(ADDR["move_close_lights"], 8)  # 0xb3..0xba
+        return {
+            "battery": {"pct": bat[0], "charging": bat[1]},
+            "polling_hz": MS_RATE.get(rr[0]),
+            "active_profile": rr[4] + 1,
+            "dpi": dpi,
+            "colors": colors,
+            "stabilization_time": low[0],
+            "motion_sync": low[2],
+            "close_led_time": low[4],
+            "linear_correction": low[6],
+            "ripple_control": low[8],
+            "move_close_lights": high[0],
+            "sensor_enable": high[2],
+            "sensor_time": high[4],
+            "sensor_mode": high[6],
+        }
+
+
+def decode_dpi(block):
+    idx = (((block[2] // 0x44) << 8) | block[0])
+    return (idx + 1) * 50
+
+
+def encode_dpi(dpi):
+    if dpi % 50 or not (100 <= dpi <= 30000):
+        raise MouseError(f"DPI must be a multiple of 50 in 100..30000, got {dpi}")
+    idx = dpi // 50 - 1
+    b0 = idx & 0xFF
+    b2 = ((idx >> 8) * 0x44) & 0xFF
+    return [b0, b0, b2, (0x55 - b0 - b0 - b2) & 0xFF]
+
+
+def load_backup():
+    if not os.path.isdir(BACKUP_DIR):
+        return None
+    files = sorted(f for f in os.listdir(BACKUP_DIR) if f.endswith(".json"))
+    if not files:
+        return None
+    with open(os.path.join(BACKUP_DIR, files[-1])) as fh:
+        return json.load(fh)
+
+
+def save_backup(mouse):
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    data = {
+        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        "report_rate": mouse.read(ADDR["report_rate"], 10),
+        "dpi_pairs": {str(a): mouse.read(a, 8) for a in
+                      (ADDR["dpi_pair1"], ADDR["dpi_pair3"], ADDR["dpi_pair5"], ADDR["dpi_pair7"])},
+        "color_pairs": {str(a): mouse.read(a, 8) for a in
+                        (ADDR["color_pair1"], ADDR["color_pair3"], ADDR["color_pair5"], ADDR["color_pair7"])},
+        "stabilization": mouse.read(ADDR["stabilization"], 10),
+        "move_close_lights": mouse.read(ADDR["move_close_lights"], 8),
+    }
+    path = os.path.join(BACKUP_DIR, time.strftime("backup-%Y%m%d-%H%M%S.json"))
+    with open(path, "w") as fh:
+        json.dump(data, fh, indent=2)
+    with open(os.path.join(BACKUP_DIR, "latest.json"), "w") as fh:
+        json.dump(data, fh, indent=2)
+    # keep only the 5 most recent timestamped backups
+    stamps = sorted(f for f in os.listdir(BACKUP_DIR)
+                    if f.startswith("backup-") and f.endswith(".json"))
+    for old in stamps[:-5]:
+        try:
+            os.remove(os.path.join(BACKUP_DIR, old))
+        except OSError:
+            pass
+    return path
+
+
+def auto_backup(mouse, args):
+    if args.no_backup:
+        return
+    try:
+        save_backup(mouse)
+    except Exception as e:
+        sys.stderr.write(f"warning: backup failed: {e}\n")
+
+
+def cmd_info(mouse, args):
+    info = mouse.read_all()
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0
+    b = info["battery"]
+    print(f"Akku:            {b['pct']}%{' (lädt)' if b['charging'] else ''}")
+    print(f"Polling-Rate:    {info['polling_hz']} Hz")
+    print(f"Aktives Profil:  {info['active_profile']}")
+    print("DPI:             " + "  ".join(f"DPI{i+1}={v}" for i, v in enumerate(info["dpi"])))
+    print("Farben:          " + "  ".join(info["colors"]))
+    print(f"Stabilization:   {info['stabilization_time']}")
+    print(f"Motion-Sync:     {info['motion_sync']}")
+    print(f"Close-LED-Time:  {info['close_led_time']}")
+    print(f"Linear-Corr:     {info['linear_correction']}")
+    print(f"Ripple-Control:  {info['ripple_control']}")
+    print(f"Move-Close-LED:  {info['move_close_lights']}")
+    print(f"Sensor-Enable:   {info['sensor_enable']}  Sensor-Time: {info['sensor_time']}  Sensor-Mode: {info['sensor_mode']}")
+    return 0
+
+
+def dpi_pair_addr(slot):
+    return (ADDR["dpi_pair1"], ADDR["dpi_pair3"], ADDR["dpi_pair5"], ADDR["dpi_pair7"])[(slot - 1) // 2]
+
+
+def color_pair_addr(slot):
+    return (ADDR["color_pair1"], ADDR["color_pair3"], ADDR["color_pair5"], ADDR["color_pair7"])[(slot - 1) // 2]
+
+
+def cmd_rate(mouse, args):
+    if args.hz not in RATE_MS:
+        raise MouseError("rate must be 125, 250, 500 or 1000")
+    auto_backup(mouse, args)
+    data = mouse.read(ADDR["report_rate"], 10)
+    data[0] = RATE_MS[args.hz]
+    data[1] = (0x55 - data[0]) & 0xFF
+    mouse.write(ADDR["report_rate"], data)
+    print(f"Polling-Rate = {args.hz} Hz")
+
+
+def cmd_profile(mouse, args):
+    if not 1 <= args.slot <= 8:
+        raise MouseError("profile must be 1..8")
+    auto_backup(mouse, args)
+    data = mouse.read(ADDR["report_rate"], 10)
+    idx = args.slot - 1
+    data[4] = idx
+    data[5] = (0x55 - idx) & 0xFF
+    mouse.write(ADDR["report_rate"], data)
+    print(f"aktives Profil = DPI{args.slot}")
+
+
+def cmd_dpi(mouse, args):
+    if not 1 <= args.slot <= 8:
+        raise MouseError("slot must be 1..8")
+    new_block = encode_dpi(args.value)
+    auto_backup(mouse, args)
+    addr = dpi_pair_addr(args.slot)
+    data = mouse.read(addr, 8)
+    off = 4 if (args.slot - 1) % 2 else 0
+    data[off:off + 4] = new_block
+    mouse.write(addr, data)
+    print(f"DPI{args.slot} = {args.value}")
+
+
+def parse_hex_color(value):
+    v = value.lstrip("#")
+    if len(v) != 6:
+        raise MouseError("color must be #rrggbb")
+    return [int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)]
+
+
+def cmd_color(mouse, args):
+    if not 1 <= args.slot <= 8:
+        raise MouseError("slot must be 1..8")
+    r, g, b = parse_hex_color(args.value)
+    auto_backup(mouse, args)
+    addr = color_pair_addr(args.slot)
+    data = mouse.read(addr, 8)
+    off = 4 if (args.slot - 1) % 2 else 0
+    data[off:off + 3] = [r, g, b]
+    data[off + 3] = (0x55 - r - g - b) & 0xFF
+    mouse.write(addr, data)
+    print(f"Farbe DPI{args.slot} = #{r:02x}{g:02x}{b:02x}")
+
+
+def cmd_restore(mouse, args):
+    backup = load_backup() if not args.file else json.load(open(args.file))
+    if not backup:
+        raise MouseError("kein Backup gefunden")
+    mouse.write(ADDR["report_rate"], backup["report_rate"])
+    for a, d in backup["dpi_pairs"].items():
+        mouse.write(int(a), d)
+    for a, d in backup["color_pairs"].items():
+        mouse.write(int(a), d)
+    mouse.write(ADDR["stabilization"], backup["stabilization"])
+    mouse.write(ADDR["move_close_lights"], backup["move_close_lights"])
+    print(f"Backup wiederhergestellt ({backup.get('ts', '?')})")
+
+
+def cmd_backup(mouse, args):
+    path = save_backup(mouse)
+    print(f"Backup: {path}")
+
+
+def cmd_raw_read(mouse, args):
+    d = mouse.read(args.addr, args.length)
+    print(" ".join(f"{b:02x}" for b in d))
+
+
+def cmd_raw_write(mouse, args):
+    data = [int(x, 16) for x in args.hex.split()]
+    auto_backup(mouse, args)
+    mouse.write(args.addr, data)
+    print(f"wrote {len(data)} bytes @0x{args.addr:02x}")
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="ajazz-ctl", description="Ajazz AJ139 Pro (COMPX) mouse control")
+    p.add_argument("--no-backup", action="store_true", help="skip the automatic backup before writing")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("info", help="show battery, DPI, rate, colors, settings")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_info)
+
+    s = sub.add_parser("rate", help="set polling rate")
+    s.add_argument("hz", type=int, choices=[125, 250, 500, 1000])
+    s.set_defaults(func=cmd_rate)
+
+    s = sub.add_parser("profile", help="select active DPI profile (1-8)")
+    s.add_argument("slot", type=int)
+    s.set_defaults(func=cmd_profile)
+
+    s = sub.add_parser("dpi", help="set DPI value for a profile (1-8)")
+    s.add_argument("slot", type=int)
+    s.add_argument("value", type=int)
+    s.set_defaults(func=cmd_dpi)
+
+    s = sub.add_parser("color", help="set the LED color of a DPI profile")
+    s.add_argument("slot", type=int)
+    s.add_argument("value", help="#rrggbb")
+    s.set_defaults(func=cmd_color)
+
+    s = sub.add_parser("backup", help="write a full config backup")
+    s.set_defaults(func=cmd_backup)
+
+    s = sub.add_parser("restore", help="restore from the last (or given) backup")
+    s.add_argument("file", nargs="?")
+    s.set_defaults(func=cmd_restore)
+
+    s = sub.add_parser("raw-read", help="read N bytes at an EEPROM address")
+    s.add_argument("addr", type=lambda x: int(x, 0))
+    s.add_argument("length", type=int)
+    s.set_defaults(func=cmd_raw_read)
+
+    s = sub.add_parser("raw-write", help="write hex bytes at an EEPROM address")
+    s.add_argument("addr", type=lambda x: int(x, 0))
+    s.add_argument("hex")
+    s.set_defaults(func=cmd_raw_write)
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
+    try:
+        with Mouse() as mouse:
+            return args.func(mouse, args) or 0
+    except MouseError as e:
+        sys.stderr.write(f"ajazz-ctl: {e}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
