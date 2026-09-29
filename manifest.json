@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "alan.ajazz-mouse",
+  "id": "io.github.alanus96.ajazz-mouse",
   "name": "Ajazz Mouse Battery",
   "version": "1.0.0",
-  "author": "alan",
+  "author": "Alanus96",
   "license": "MIT",
   "description": "Battery, charging state and connection mode of an Ajazz AJ139 Pro (COMPX) mouse, read directly over HID.",
   "kinds": [
