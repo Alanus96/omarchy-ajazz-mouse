@@ -10,7 +10,7 @@ import qs.Ui
 // next poll. Left click opens the control panel.
 BarWidget {
   id: root
-  moduleName: "alan.ajazz-mouse"
+  moduleName: "io.github.alanus96.ajazz-mouse"
 
   property var status: ({})
   property bool haveStatus: false
@@ -20,7 +20,13 @@ BarWidget {
   readonly property int warningThreshold: Number(setting("warningThreshold", 30))
   readonly property int criticalThreshold: Number(setting("criticalThreshold", 15))
   readonly property bool hideWhenOffline: setting("hideWhenOffline", false) === true
-  readonly property string scriptPath: Quickshell.env("HOME") + "/.local/bin/ajazz-battery"
+  readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/ajazz-battery"))
+
+  function localPath(url) {
+    var value = String(url || "")
+    if (value.indexOf("file://") === 0) value = value.substring(7)
+    try { return decodeURIComponent(value) } catch (error) { return value }
+  }
 
   readonly property bool present: haveStatus ? status.present === true : false
   readonly property bool online: haveStatus ? status.online === true : false

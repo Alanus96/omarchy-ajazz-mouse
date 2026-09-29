@@ -10,8 +10,8 @@ import qs.Ui
 // backup before writing.
 Panel {
   id: root
-  moduleName: "alan.ajazz-mouse"
-  ipcTarget: "alan.ajazz-mouse"
+  moduleName: "io.github.alanus96.ajazz-mouse"
+  ipcTarget: "io.github.alanus96.ajazz-mouse"
   manageIpc: false
 
   property var anchorItem: null
@@ -22,7 +22,13 @@ Panel {
   property string error: ""
 
   readonly property var barIdentity: hostWidget || root
-  readonly property string ctlPath: Quickshell.env("HOME") + "/.local/bin/ajazz-ctl"
+  readonly property string ctlPath: localPath(Qt.resolvedUrl("scripts/ajazz-ctl"))
+
+  function localPath(url) {
+    var value = String(url || "")
+    if (value.indexOf("file://") === 0) value = value.substring(7)
+    try { return decodeURIComponent(value) } catch (error) { return value }
+  }
   readonly property var palette: ["#ff0000", "#00ff00", "#0000ff", "#ffff00",
                                   "#00ffff", "#ff00ff", "#ffffff", "#ff8000",
                                   "#8000ff", "#000000"]
