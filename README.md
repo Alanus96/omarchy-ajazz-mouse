@@ -1,74 +1,66 @@
-# omarchy-ajazz-mouse
+# Ajazz Mouse Battery (Omarchy plugin)
 
-Battery read-out **and** configuration for the **Ajazz AJ139 Pro** (and
-likely other AJazz / ATK / VXE / COMPX mice) on Linux, packaged as an
-[Omarchy](https://omarchy.org/) bar widget with a control popup.
-
-No vendor software, no Windows, no VM — it talks to the mouse directly over
-HID. The protocol was reverse-engineered by the ATK/VXE community (see
-[Credits](#credits)).
-
-![kind](https://img.shields.io/badge/kind-bar--widget-blue)
-![license](https://img.shields.io/badge/license-MIT-green)
-
-## Features
+Battery read-out **and** configuration for the **Ajazz AJ139 Pro** (and likely
+other Ajazz / ATK / VXE / COMPX mice) as an [Omarchy](https://omarchy.org/)
+bar widget with a control popup. No vendor software, no Windows — it talks to
+the mouse directly over HID.
 
 - **Bar widget:** mouse icon + battery percentage, lightning bolt while
   charging, warning colour when low. Tooltip shows charging state and
-  `wired`/`wireless`. Reacts to plugging/unplugging the cable within ~2 s.
-- **Control popup** (left-click the icon):
-  - polling rate (125 / 250 / 500 / 1000 Hz)
-  - active DPI profile (1–8)
-  - all 8 DPI stages with `−`/`+` (50 DPI step)
-  - per-stage LED colour (click cycles a palette)
-  - backup / restore
-- **CLI** (`ajazz-ctl`) for scripting and everything above.
-- Automatic full-config backup before the first write, plus `restore`.
+  `wired`/`wireless`; reacts to plugging/unplugging within ~2 s.
+- **Control popup** (left-click the icon): polling rate (125/250/500/1000 Hz),
+  active DPI profile (1–8), all 8 DPI stages (`−`/`+`, 50 DPI step), per-stage
+  LED colour, and backup/restore.
+- **CLI** (`scripts/ajazz-ctl`) for scripting.
+
+Protocol was reverse-engineered by the ATK/VXE community — see [Credits](#credits).
 
 ## Requirements
 
-- Arch Linux / Omarchy (uses `omarchy plugin`, systemd not required).
-- `python-hidapi` (battery widget) and `python-usb` / pyusb (config reads &
-  writes):
-  ```bash
-  sudo pacman -S python-hidapi python-pyusb
-  # or: omarchy pkg add python-hidapi python-pyusb
-  ```
-- Your user must be able to access the mouse's `hidraw` and USB device nodes.
-  The shipped udev rule grants that to the `wheel` group (the default admin
-  group on Arch).
+- Omarchy (Quattro shell) with `omarchy plugin`.
+- `python-hidapi` (battery) and `python-pyusb` (configuration reads/writes).
+- Access to the mouse's `hidraw` and USB device nodes via the shipped udev
+  rule (granted to the `wheel` group, the default admin group on Arch).
 
 ## Install
 
 ```bash
-git clone <this repo> omarchy-ajazz-mouse
-cd omarchy-ajazz-mouse
-./install.sh
+# 1. install the widget (clones this repo into your plugin dir)
+omarchy plugin add https://github.com/Alanus96/omarchy-ajazz-mouse --enable
+
+# 2. dependencies
+omarchy pkg add python-hidapi python-pyusb       # or: sudo pacman -S python-hidapi python-pyusb
+
+# 3. permissions: install the udev rule (needs sudo; do this once)
+PLUGIN_DIR="$HOME/.config/omarchy/plugins/io.github.alanus96.ajazz-mouse"
+sudo install -m 0644 "$PLUGIN_DIR/udev/99-ajazz-aj139-pro.rules" /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=usb --action=change
+sudo udevadm trigger --subsystem-match=hidraw --action=change
+# then unplug/replug the mouse or dongle once
 ```
 
-The installer copies the plugin to
-`~/.config/omarchy/plugins/alan.ajazz-mouse/`, the scripts to
-`~/.local/bin/`, installs the udev rule (with `sudo`) and enables the widget
-in the right bar section.
+From a cloned copy you can run `./setup.sh` instead of step 3.
 
-Manual install is just copying those three things and running
-`omarchy plugin enable alan.ajazz-mouse right`.
+> **Manual setup is required:** the udev rule and the Python modules cannot be
+> installed automatically by the marketplace. The widget will show nothing
+> until they are in place.
 
-Uninstall:
+## Removal
 
 ```bash
-./uninstall.sh
+sudo rm -f /etc/udev/rules.d/99-ajazz-aj139-pro.rules
+sudo udevadm control --reload-rules
+omarchy plugin remove io.github.alanus96.ajazz-mouse --yes
 ```
 
 ## Usage
 
-### Widget
-
-Click the mouse icon in the bar. Everything in the popup takes effect on the
-mouse immediately. While a control action runs, the HID *config* interface is
+Click the mouse icon in the bar. Every control takes effect on the mouse
+immediately. While a control action runs, the HID *config* interface is
 detached for a moment; the movement interface is untouched.
 
-### CLI `ajazz-ctl`
+CLI (inside the installed plugin folder, or the repo's `scripts/`):
 
 ```
 ajazz-ctl info [--json]           # battery, rate, profile, 8×DPI, colours, settings
@@ -76,15 +68,15 @@ ajazz-ctl rate 125|250|500|1000   # polling rate
 ajazz-ctl profile 1..8            # active DPI profile
 ajazz-ctl dpi 3 1600              # set a DPI stage (multiple of 50)
 ajazz-ctl color 1 '#ff8800'       # LED colour of a stage
-ajazz-ctl backup | restore        # config backup / rollback (keeps latest + 5)
+ajazz-ctl backup | restore        # config backup / rollback (latest + 5)
 ajazz-ctl raw-read 0xa9 10        # read raw EEPROM
 ajazz-ctl raw-write 0xa9 '01 54'  # write raw EEPROM
+
+ajazz-battery                     # one-line battery status
+ajazz-battery --status            # JSON consumed by the widget
 ```
 
-`ajazz-battery --status` prints the JSON the widget consumes; `ajazz-battery`
-alone prints a one-liner.
-
-## Configuration
+## Settings
 
 Widget settings (via the Omarchy settings UI, stored in
 `~/.config/omarchy/shell.json`):
@@ -99,42 +91,42 @@ Widget settings (via the Omarchy settings UI, stored in
 
 ## How it works
 
-- **Battery**: HID report id `0x08`, command `0x04` (`GetBatteryLevel`) over
-  `hidraw`. Fast and needs no driver detach.
-- **Config (DPI, rate, colours, …)**: HID report id `0x08`,
-  commands `0x07` (`SetEEPROM`) / `0x08` (`GetEEPROM`). A 16-byte command
+- **Battery:** HID report id `0x08`, command `0x04` (`GetBatteryLevel`) over
+  `hidraw`. Fast, no driver detach.
+- **Configuration (DPI, rate, colours, …):** HID report id `0x08`, commands
+  `0x07` (`SetEEPROM`) / `0x08` (`GetEEPROM`). A 16-byte command
   `[cmd, status, addr_hi, addr_lo, len, data…, checksum]` is sent as a USB
   control `SET_REPORT`; the reply arrives on the interface's interrupt-IN
-  endpoint. Because the kernel HID driver owns that interface, it is
-  detached for the duration of the call (mouse movement is unaffected).
+  endpoint. The kernel HID driver owns that interface, so it is detached for
+  the duration of the call (movement is unaffected).
 - Checksum settles the byte sum at `0x55`.
 
-Useful EEPROM addresses: `0x00` report-rate/active-DPI block, `0x0c/0x14/0x1c/0x24`
-DPI pairs (stages 1–8), `0x2c/0x34/0x3c/0x44` DPI colours, `0xa9`+ settings
-(stabilisation, motion sync, sleep, …).
+Useful EEPROM addresses: `0x00` report-rate/active-DPI block,
+`0x0c/0x14/0x1c/0x24` DPI pairs (stages 1–8), `0x2c/0x34/0x3c/0x44` DPI
+colours, `0xa9`+ settings (stabilisation, motion sync, sleep, …).
 
 ## Supported devices
 
 Tested on the **Ajazz AJ139 Pro** (`25a7:fa7b` wired, `25a7:fa7c` dongle).
 Other Ajazz / ATK / VXE mice that speak the same COMPX protocol should work
-after adjusting the VID/PID lists in `bin/ajazz-battery` and `bin/ajazz-ctl`.
-Please open a PR with the IDs if you test another model.
+after adjusting the VID/PID lists in `scripts/ajazz-battery` and
+`scripts/ajazz-ctl`. Pull requests with additional IDs are welcome.
 
 ## Credits
 
 - [`libatk-rs`](https://crates.io/crates/libatk-rs) and
-  [`VoideUI/Linux-ATK`](https://github.com/VoideUI/Linux-ATK) — clean
-  reference for the command framing and EEPROM map.
+  [`VoideUI/Linux-ATK`](https://github.com/VoideUI/Linux-ATK) — command framing
+  and EEPROM map.
 - [`mateusands/open-m711pro`](https://github.com/mateusands/open-m711pro) —
-  protocol notes for COMPX `25a7` mice.
+  COMPX `25a7` protocol notes.
 - `245582001g-oss/mouse-battery-reminder` — the `0x04` battery command.
 - [`xb-bx/atk-a9-ultra-driver`](https://github.com/xb-bx/atk-a9-ultra-driver) —
   control-transfer reference.
 
 ## Disclaimer
 
-Unofficial and not affiliated with Ajazz. Writing to the mouse changes its
-stored configuration; the tools back up first, but use at your own risk.
+Unofficial; not affiliated with Ajazz. Writing changes the mouse's stored
+configuration. The tools back up first, but use at your own risk.
 
 ## License
 
