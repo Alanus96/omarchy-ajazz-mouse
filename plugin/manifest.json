@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "alan.ajazz-mouse",
+  "name": "Ajazz Mouse Battery",
+  "version": "1.0.0",
+  "author": "alan",
+  "license": "MIT",
+  "description": "Battery, charging state and connection mode of an Ajazz AJ139 Pro (COMPX) mouse, read directly over HID.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Ajazz Mouse",
+    "description": "Ajazz AJ139 Pro battery, charging state and wired/wireless mode.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showPercent": true,
+      "pollInterval": 2,
+      "warningThreshold": 30,
+      "criticalThreshold": 15,
+      "hideWhenOffline": false
+    },
+    "schema": [
+      { "key": "showPercent", "type": "boolean", "label": "Show percentage", "default": true },
+      { "key": "pollInterval", "type": "number", "label": "Poll interval (seconds)", "default": 2 },
+      { "key": "warningThreshold", "type": "number", "label": "Warning threshold (%)", "default": 30 },
+      { "key": "criticalThreshold", "type": "number", "label": "Critical threshold (%)", "default": 15 },
+      { "key": "hideWhenOffline", "type": "boolean", "label": "Hide when the mouse is off", "default": false }
+    ]
+  }
+}
