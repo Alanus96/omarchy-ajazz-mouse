@@ -5,6 +5,9 @@ other Ajazz / ATK / VXE / COMPX mice) as an [Omarchy](https://omarchy.org/)
 bar widget with a control popup. No vendor software, no Windows — it talks to
 the mouse directly over HID.
 
+> **Note:** this is an AI-assisted ("vibecoded") project. It may contain bugs —
+> use it at your own risk.
+
 - **Bar widget:** mouse icon + battery percentage, lightning bolt while
   charging, warning colour when low. Tooltip shows charging state and
   `wired`/`wireless`; reacts to plugging/unplugging within ~2 s.
@@ -125,8 +128,12 @@ after adjusting the VID/PID lists in `scripts/ajazz-battery` and
 
 ## Disclaimer
 
-Unofficial; not affiliated with Ajazz. Writing changes the mouse's stored
-configuration. The tools back up first, but use at your own risk.
+Unofficial; not affiliated with Ajazz. **This plugin was written with AI
+assistance ("vibecoded") and may contain bugs — use it at your own risk.**
+
+Writing changes the mouse's stored configuration. The tools take a backup
+before the first write, but a restore is not guaranteed. Review the source
+before installing.
 
 ## License
 
