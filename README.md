@@ -139,3 +139,16 @@ before installing.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+---
+
+## Vibe-coded
+
+```
+⠙⢷⣶⣄⡀⠀⠀⠀⠀⠀⢀⣀⣀⣀⡀⠀⢀⡀⣰⣿⡿   VIBECODED
+⠀⣸⣿⣿⣿⣦⠀⠀⠀⠀⠀⠉⠿⠿⣿⣶⣿⣿⡿⠛⠁   human x machine
+⠀⠈⠻⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠈⠈⠉⠻⠁⠀⠀   vereint in diesem projekt
+⠀⠀⢀⣿⣿⣿⣿⠀⢀⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   human   Alanus96
+⠀⠀⠀⠈⠻⣿⣿⣷⣾⣷⡾⠀⣀⣤⣶⣶⣶⣶⣤⣄⠀   machine OpenCode
+⠀⠀⠀⠀⠀⠘⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠛⠋⠑   model   DeepSeek V4.1 Flash 1017
+⠀⠀⠀⠀⠀⠀⢹⠟⠛⠉⠉⠙⠻⡟⠁⠀⠈⠁⠀⠀⠀   route   deepseek/deepseek-flash
+```
